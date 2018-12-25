@@ -57,6 +57,14 @@ namespace AzureKeyVault.LetsEncrypt
             await context.CallActivityWithRetryAsync(nameof(CheckIsReady), new RetryOptions(TimeSpan.FromSeconds(5), 12), orderDetails);
 
             await context.CallActivityAsync(nameof(FinalizeOrder), (dnsNames, orderDetails));
+
+            // Webhook を実行
+            await context.CallActivityWithRetryAsync(nameof(RaiseWebhookEvent), new RetryOptions(TimeSpan.FromSeconds(10), 5), new WebhookPayload
+            {
+                IsSuccess = true,
+                Action = nameof(IssueCertificate),
+                HostNames = dnsNames
+            });
         }
 
         [FunctionName(nameof(GetCertificates))]
@@ -246,6 +254,21 @@ namespace AzureKeyVault.LetsEncrypt
             var certificate = new X509Certificate2(certificateData);
 
             await keyVaultClient.MergeCertificateAsync(Settings.Default.VaultBaseUrl, certificateName, new X509Certificate2Collection(certificate));
+        }
+
+        [FunctionName(nameof(RaiseWebhookEvent))]
+        public static async Task RaiseWebhookEvent([ActivityTrigger] DurableActivityContext context, ILogger log)
+        {
+            if (string.IsNullOrEmpty(Settings.Default.Webhook))
+            {
+                return;
+            }
+
+            var payload = context.GetInput<WebhookPayload>();
+
+            var response = await _httpClient.PostAsJsonAsync(Settings.Default.Webhook, payload);
+
+            response.EnsureSuccessStatusCode();
         }
 
         private static async Task<AcmeProtocolClient> CreateAcmeClientAsync()
